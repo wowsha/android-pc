@@ -1,0 +1,7 @@
+# Source tree and generated output are fetched/created by the build.
+android-x86/
+dist/
+ccache/
+.repo/
+*.iso
+*.img
