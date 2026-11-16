@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/system-vold
+branch=jb-x86
+commit=d6925769d810834a88f3180da23019ecdb04fe4e
