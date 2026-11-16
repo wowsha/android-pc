@@ -3,24 +3,18 @@ name: Build Android-x86 ISO (Jelly Bean)
 on:
   workflow_dispatch:
     inputs:
-      android_x86_branch:
-        description: Android-x86 manifest branch
-        required: true
-        default: jb-x86
-        type: string
       target_product:
-        description: Build target (android_x86 is the Jelly Bean x86 target)
+        description: Jelly Bean x86 target
         required: true
         default: android_x86
         type: string
-  push:
+  workflow_run:
+    workflows:
+      - Import Android-x86 Jelly Bean source
+    types:
+      - completed
     branches:
       - main
-    paths:
-      - ".github/workflows/build-iso.yml"
-      - "docker/**"
-      - "scripts/**"
-      - "README.md"
 
 permissions:
   contents: read
@@ -31,19 +25,29 @@ concurrency:
 
 jobs:
   build-iso:
-    name: Sync source and build ISO
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    name: Build ISO from checked-in Android-x86 source
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     env:
-      ANDROID_X86_BRANCH: ${{ github.event.inputs.android_x86_branch || 'jb-x86' }}
+      ANDROID_X86_BRANCH: jb-x86
       TARGET_PRODUCT: ${{ github.event.inputs.target_product || 'android_x86' }}
       REPO_SYNC_JOBS: "2"
       BUILD_JOBS: "2"
       ARTIFACT_DIR: /workspace/dist
 
     steps:
-      - name: Check out build configuration
+      - name: Check out repository source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+
+      - name: Verify vendored Android-x86 source is present
+        run: |
+          test -d android-x86-source/frameworks/base
+          test -d android-x86-source/kernel
+          test -f manifests/remove-jb-x86-projects.xml
+          find android-x86-source -type f | wc -l
 
       - name: Reclaim runner disk space
         run: |
@@ -59,7 +63,7 @@ jobs:
             --tag android-x86-builder:jb \
             .
 
-      - name: Sync Android-x86 source and build ISO
+      - name: Build ISO using checked-in Android-x86 source
         run: |
           mkdir -p dist
           docker run --rm \
