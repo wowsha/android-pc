@@ -42,21 +42,33 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
 
-      - name: Verify vendored Android-x86 source is present
+      - name: Check that the vendored source import is complete
+        id: source-status
         run: |
-          test -f android-x86-source/build/core/root.mk
-          test -d android-x86-source/frameworks/base
-          test -d android-x86-source/kernel
-          test -f manifests/remove-jb-x86-projects.xml
-          find android-x86-source -type f | wc -l
+          marker_count="$(find android-x86-source/.source-imported -maxdepth 1 -type f -name '*.txt' 2>/dev/null | wc -l)"
+          echo "Imported project markers: $marker_count / 42"
+          if [[ "$marker_count" -ge 42 ]] \
+            && test -f android-x86-source/build/core/root.mk \
+            && test -d android-x86-source/frameworks/base \
+            && test -d android-x86-source/kernel \
+            && test -d android-x86-source/device/generic/x86 \
+            && test -f manifests/remove-jb-x86-projects.xml; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            find android-x86-source -type f | wc -l
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Source import is incomplete; this run will not attempt an ISO build."
+          fi
 
       - name: Reclaim runner disk space
+        if: steps.source-status.outputs.ready == 'true'
         run: |
           sudo rm -rf /usr/local/lib/android/sdk /usr/share/dotnet /opt/ghc /usr/local/share/boost
           docker system prune --all --force || true
           df -h
 
       - name: Build legacy Ubuntu toolchain image
+        if: steps.source-status.outputs.ready == 'true'
         run: |
           docker build \
             --pull \
@@ -65,6 +77,7 @@ jobs:
             .
 
       - name: Build ISO using checked-in Android-x86 source
+        if: steps.source-status.outputs.ready == 'true'
         run: |
           mkdir -p dist
           docker run --rm \
@@ -80,6 +93,7 @@ jobs:
             bash -lc 'mkdir -p "$HOME" && bash scripts/build-android-x86.sh'
 
       - name: Upload ISO artifact
+        if: steps.source-status.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: android-x86-iso-${{ github.run_number }}
