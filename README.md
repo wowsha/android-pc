@@ -11,7 +11,7 @@ license, copyright and NOTICE files. The sources come from the public
 [Android-x86 GitHub mirror](https://github.com/android-x86-mirror).
 
 Android 4.3 is a multi-repository AOSP release. This repository vendors the
-41 Android-x86-specific projects; the unmodified AOSP base projects remain
+42 Android-x86-specific projects; the unmodified AOSP base projects remain
 external upstream dependencies and are synchronized when the build runs.
 The complete historical AOSP checkout is much larger than a normal application
 repository, so this repo contains the Android-x86-specific source overlay.
@@ -21,7 +21,7 @@ repository, so this repo contains the Android-x86-specific source overlay.
 The **Import Android-x86 Jelly Bean source** workflow imports the pinned
 Android-x86 project sources into `android-x86-source/` and commits them to
 this repository one project at a time. It is a one-time source import; normal
-ISO builds do not download those 41 Android-x86 projects again.
+ISO builds do not download those 42 Android-x86 projects again.
 
 The importer can be run from the Actions tab if it needs to be resumed. Already
 imported projects are identified by commit markers and skipped on a retry.
