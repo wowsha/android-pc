@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-v86d
+branch=jb-x86
+commit=b4dd19605662f73f7e5fb182479034b48e9dbd1f
