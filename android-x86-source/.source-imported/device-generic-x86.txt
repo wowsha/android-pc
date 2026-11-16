@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/device-generic-x86
+branch=jb-x86
+commit=b8b2dc0835dd5e0b684c665311127d9bbb320372
