@@ -1,42 +1,59 @@
 # Android PC — Android-x86 Jelly Bean
 
-This repository provides the build configuration and GitHub Actions workflow for producing an Android-x86 **Jelly Bean (Android 4.3)** ISO.
+This project builds a 32-bit Android-x86 Jelly Bean (Android 4.3) ISO.
 
-The upstream Android-x86 source is a multi-repository tree managed by Google's `repo` tool. It is deliberately downloaded during the build instead of copied into this repository: the full source tree is very large and is maintained upstream.
+## Source layout
 
-## Build an ISO with GitHub Actions
+The Android-x86-specific source projects are stored in this repository under
+`android-x86-source/`. The pinned source list is in
+`manifests/jb-x86-vendor.tsv`; every imported project keeps its upstream
+license, copyright and NOTICE files. The sources come from the public
+[Android-x86 GitHub mirror](https://github.com/android-x86-mirror).
 
-1. Open the **Actions** tab.
+Android 4.3 is a multi-repository AOSP release. This repository vendors the
+41 Android-x86-specific projects; the unmodified AOSP base projects remain
+external upstream dependencies and are synchronized when the build runs.
+The complete historical AOSP checkout is much larger than a normal application
+repository, so this repo contains the Android-x86-specific source overlay.
+
+## Import source
+
+The **Import Android-x86 Jelly Bean source** workflow imports the pinned
+Android-x86 project sources into `android-x86-source/` and commits them to
+this repository one project at a time. It is a one-time source import; normal
+ISO builds do not download those 41 Android-x86 projects again.
+
+The importer can be run from the Actions tab if it needs to be resumed. Already
+imported projects are identified by commit markers and skipped on a retry.
+
+## Build an ISO
+
+After the source import succeeds:
+
+1. Open **Actions**.
 2. Select **Build Android-x86 ISO (Jelly Bean)**.
-3. Choose **Run workflow**. The defaults are:
-   - Branch: `jb-x86`
-   - Product: `android_x86` (32-bit x86)
-4. Wait for the job to finish, then open the run and download the artifact named `android-x86-iso-<run number>`. It contains `android-x86-jb-x86-android_x86.iso` and `build-info.txt`.
+3. Select **Run workflow** (defaults to `android_x86`).
+4. Download the ISO from the completed run's **Artifacts** section.
 
-The workflow also runs when build configuration files are changed on `main`.
+The source-import workflow also starts an ISO build automatically after it
+finishes successfully.
 
-## What the workflow does
+## Build configuration
 
-- Creates an Ubuntu 18.04 build container with legacy Android build dependencies.
-- Fetches the Android-x86 `jb-x86` manifest and source projects using `repo`.
-- Builds `iso_img` for `TARGET_PRODUCT=android_x86`.
-- Uploads the generated ISO and a small build-info file as a workflow artifact.
+- Android-x86 branch: `jb-x86`
+- Android target: `android_x86` (32-bit x86)
+- Build container: Ubuntu 18.04 with OpenJDK 8 and legacy build dependencies
+- ISO target: `make iso_img TARGET_PRODUCT=android_x86`
 
-The expected source build output is under `out/target/product/`; the workflow collects the generated ISO into `dist/`.
-
-## Upstream source and build notes
-
-- Android-x86 source/build instructions: https://www.android-x86.org/source
-- The upstream project identifies `jb-x86` as Android 4.3 Jelly Bean and documents `android_x86` as the target for Jelly Bean and KitKat.
-- The upstream build documentation notes that older branches may require Oracle Java 6; it also lists OpenJDK 8 among the Ubuntu 18.04 build packages. This workflow uses OpenJDK 8 as the best-effort reproducible CI baseline. The branch is historical, so upstream toolchain changes or unavailable legacy dependencies can still cause a build failure.
-
-## Source availability
-
-This repository contains the project-specific build scripts and automation, not a vendored copy of every Android-x86/AOSP repository. The actual Android-x86 sources are fetched from the upstream manifest at build time. That keeps this repository manageable and avoids creating a stale fork of dozens of upstream repositories.
+Jelly Bean is a historical Android release. Its upstream documentation says
+pre-KitKat branches may require Oracle Java 6 and warns that OpenJDK may not
+work. The CI toolchain uses OpenJDK 8 as a best-effort baseline, so a successful
+source import does not guarantee a successful ISO build; compiler/toolchain
+compatibility may still need follow-up fixes.
 
 ## Local build
 
-The same build script is `scripts/build-android-x86.sh`. Run it in the provided container image after building the image:
+Build and run the container as documented below after the source is present:
 
 ```sh
 docker build -f docker/android-x86-builder.Dockerfile -t android-x86-builder .
@@ -51,5 +68,3 @@ docker run --rm \
   android-x86-builder \
   bash -lc 'mkdir -p "$HOME" && bash scripts/build-android-x86.sh'
 ```
-
-The build downloads many gigabytes and can take several hours. A machine with substantial free disk space and RAM is recommended.
