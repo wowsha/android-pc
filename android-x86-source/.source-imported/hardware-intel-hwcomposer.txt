@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/hardware-intel-hwcomposer
+branch=jb-x86
+commit=acb3f6506b1d667941b93756f94ba49f10fa1efb
