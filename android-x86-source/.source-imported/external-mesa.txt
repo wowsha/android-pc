@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-mesa
+branch=jb-x86
+commit=a48404d26de7c9ea58179164a495ed30ae87e6f8
