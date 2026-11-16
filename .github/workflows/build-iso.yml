@@ -44,6 +44,7 @@ jobs:
 
       - name: Verify vendored Android-x86 source is present
         run: |
+          test -f android-x86-source/build/core/root.mk
           test -d android-x86-source/frameworks/base
           test -d android-x86-source/kernel
           test -f manifests/remove-jb-x86-projects.xml
