@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-wpa_supplicant_8
+branch=jb-x86
+commit=ec221c76b88f4b8f4af6928b227d13e407e2cb10
