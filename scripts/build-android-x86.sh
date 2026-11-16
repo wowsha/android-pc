@@ -54,6 +54,11 @@ done
 # Overlay checked-in Android-x86 code at the exact paths expected by the build.
 rsync -a --exclude='README.md' --exclude='.source-imported/' "$ANDROID_X86_SOURCE_DIR/" "$ANDROID_X86_DIR/"
 
+# The x86 build project's manifest copyfile is bypassed by the local
+# remove-project overlay, so reproduce its root Makefile copy here.
+[[ -f build/core/root.mk ]] || die "The vendored x86 build project is missing build/core/root.mk."
+cp -f build/core/root.mk Makefile
+
 [[ -f build/core/main.mk ]] || die "The assembled tree is missing build/core/main.mk."
 [[ -f device/generic/x86/AndroidProducts.mk ]] || die "The vendored x86 device tree is missing."
 
