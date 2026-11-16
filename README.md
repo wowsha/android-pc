@@ -11,7 +11,7 @@ The upstream Android-x86 source is a multi-repository tree managed by Google's `
 3. Choose **Run workflow**. The defaults are:
    - Branch: `jb-x86`
    - Product: `android_x86` (32-bit x86)
-4. Wait for the job to finish, then open the run and download the `android-x86-jb-x86-android_x86` artifact.
+4. Wait for the job to finish, then open the run and download the artifact named `android-x86-iso-<run number>`. It contains `android-x86-jb-x86-android_x86.iso` and `build-info.txt`.
 
 The workflow also runs when build configuration files are changed on `main`.
 
