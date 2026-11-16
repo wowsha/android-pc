@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-drm_gralloc
+branch=jb-x86
+commit=f875c9600e01f2d1b77d44f0d140f6404cfd5e97
