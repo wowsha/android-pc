@@ -34,6 +34,7 @@ RUN apt-get -o Acquire::Check-Valid-Until=false update \
       mtools \
       openjdk-8-jdk \
       python \
+      python3 \
       python-enum34 \
       python-mako \
       rsync \
