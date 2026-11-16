@@ -1,4 +1,5 @@
 # destination path<TAB>android-x86-mirror repository<TAB>branch
+build	build	jb-x86
 kernel	kernel	android-3.10
 bionic	bionic	jb-x86
 bootable/newinstaller	bootable-newinstaller	jb-x86
