@@ -1,0 +1,7 @@
+.git
+.github
+android-x86
+dist
+ccache
+*.iso
+*.img
