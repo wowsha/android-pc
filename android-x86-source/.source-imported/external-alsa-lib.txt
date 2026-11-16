@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-alsa-lib
+branch=jb-x86
+commit=d386838f92acf59eec0da43a483512be9c89c1dd
