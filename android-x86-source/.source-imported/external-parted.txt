@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-parted
+branch=jb-x86
+commit=e766400b3f19751cc28b8fb945642e13bb03d4ab
