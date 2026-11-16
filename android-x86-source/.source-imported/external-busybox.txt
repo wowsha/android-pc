@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-busybox
+branch=jb-x86
+commit=ffbabc466050ab837ea09ba3c0c27e0a23fcf6d0
