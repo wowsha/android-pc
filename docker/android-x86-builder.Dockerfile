@@ -4,12 +4,10 @@ FROM ubuntu:18.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Ubuntu 18.04 is an old release. Its packages are retained on old-releases.
-RUN sed -i \
-      -e 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' \
-      -e 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' \
-      /etc/apt/sources.list \
-    && apt-get -o Acquire::Check-Valid-Until=false update \
+# Bionic remains available from the normal Ubuntu archive (it is under ESM,
+# not on old-releases). Disable stale Release-file date checks for this
+# historical build image, but keep the standard archive/security endpoints.
+RUN apt-get -o Acquire::Check-Valid-Until=false update \
     && apt-get install -y --no-install-recommends \
       bc \
       bison \
