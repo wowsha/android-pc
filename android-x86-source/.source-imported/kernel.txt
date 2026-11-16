@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/kernel
+branch=android-3.10
+commit=c9506abf59bb69aebb0ba2c30193a6d9f60f1446
