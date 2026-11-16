@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/hardware-libhardware
+branch=jb-x86
+commit=eea5ad68163c57415f1e4d90239e4b30ce9e08d7
