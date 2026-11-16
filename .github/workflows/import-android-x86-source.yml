@@ -1,0 +1,34 @@
+name: Import Android-x86 Jelly Bean source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/import-android-x86-source.yml"
+      - "scripts/import-android-x86-source.sh"
+      - "manifests/jb-x86-vendor.tsv"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-x86-source-import
+  cancel-in-progress: false
+
+jobs:
+  import-source:
+    name: Vendor Android-x86 source projects
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Import the pinned Jelly Bean project sources
+        env:
+          MAX_PROJECT_MIB: "1700"
+        run: bash scripts/import-android-x86-source.sh
