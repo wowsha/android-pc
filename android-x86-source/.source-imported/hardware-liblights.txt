@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/hardware-liblights
+branch=jb-x86
+commit=e0078cc218a965ec72c34742633c1e93496a64e4
