@@ -1,0 +1,86 @@
+name: Build Android-x86 ISO (Jelly Bean)
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_x86_branch:
+        description: Android-x86 manifest branch
+        required: true
+        default: jb-x86
+        type: string
+      target_product:
+        description: Build target (android_x86 is the Jelly Bean x86 target)
+        required: true
+        default: android_x86
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-iso.yml"
+      - "docker/**"
+      - "scripts/**"
+      - "README.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-x86-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-iso:
+    name: Sync source and build ISO
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      ANDROID_X86_BRANCH: ${{ github.event.inputs.android_x86_branch || 'jb-x86' }}
+      TARGET_PRODUCT: ${{ github.event.inputs.target_product || 'android_x86' }}
+      REPO_SYNC_JOBS: "2"
+      BUILD_JOBS: "2"
+      ARTIFACT_DIR: /workspace/dist
+
+    steps:
+      - name: Check out build configuration
+        uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          docker system prune --all --force || true
+          df -h
+
+      - name: Build legacy Ubuntu toolchain image
+        run: |
+          docker build \
+            --pull \
+            --file docker/android-x86-builder.Dockerfile \
+            --tag android-x86-builder:jb \
+            .
+
+      - name: Sync Android-x86 source and build ISO
+        run: |
+          mkdir -p dist
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            --env HOME=/tmp/android-home \
+            --env ANDROID_X86_BRANCH="${ANDROID_X86_BRANCH}" \
+            --env TARGET_PRODUCT="${TARGET_PRODUCT}" \
+            --env REPO_SYNC_JOBS="${REPO_SYNC_JOBS}" \
+            --env BUILD_JOBS="${BUILD_JOBS}" \
+            --env ARTIFACT_DIR="${ARTIFACT_DIR}" \
+            android-x86-builder:jb \
+            bash -lc 'mkdir -p "$HOME" && bash scripts/build-android-x86.sh'
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-x86-iso-${{ github.run_number }}
+          path: |
+            dist/*.iso
+            dist/build-info.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
