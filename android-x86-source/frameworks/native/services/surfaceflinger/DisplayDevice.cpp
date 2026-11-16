@@ -1,0 +1,710 @@
+/*
+ * Copyright (C) 2007 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+
+#include <fcntl.h>
+#include <termios.h>
+#include <linux/kd.h>
+#include <linux/vt.h>
+
+#include <cutils/properties.h>
+
+#include <utils/RefBase.h>
+#include <utils/Log.h>
+
+#include <ui/DisplayInfo.h>
+#include <ui/PixelFormat.h>
+
+#include <gui/Surface.h>
+
+#include <GLES/gl.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
+#include <hardware/gralloc.h>
+
+#include "DisplayHardware/DisplaySurface.h"
+#include "DisplayHardware/HWComposer.h"
+
+#include "clz.h"
+#include "DisplayDevice.h"
+#include "GLExtensions.h"
+#include "SurfaceFlinger.h"
+#include "Layer.h"
+
+// ----------------------------------------------------------------------------
+using namespace android;
+// ----------------------------------------------------------------------------
+
+static __attribute__((noinline))
+void checkGLErrors()
+{
+    do {
+        // there could be more than one error flag
+        GLenum error = glGetError();
+        if (error == GL_NO_ERROR)
+            break;
+        ALOGE("GL error 0x%04x", int(error));
+    } while(true);
+}
+
+#if __i386__
+class ConsoleManagerThread : public Thread {
+public:
+            ConsoleManagerThread(const sp<SurfaceFlinger>&, const wp<IBinder>&);
+    virtual ~ConsoleManagerThread();
+
+    status_t releaseScreen() const;
+
+private:
+    sp<SurfaceFlinger> mFlinger;
+    wp<IBinder> mDisplayToken;
+    int consoleFd;
+    int vt_num;
+    int prev_vt_num;
+    vt_mode vm;
+    virtual void onFirstRef();
+    virtual status_t readyToRun();
+    virtual void requestExit();
+    virtual bool threadLoop();
+    static void sigHandler(int sig);
+    static pid_t sSignalCatcherPid;
+};
+
+ConsoleManagerThread::ConsoleManagerThread(const sp<SurfaceFlinger>& flinger, const wp<IBinder>& token)
+    : Thread(false), mFlinger(flinger), mDisplayToken(token), consoleFd(-1)
+{
+    sSignalCatcherPid = 0;
+
+    // create a new console
+    char const * const ttydev = "/dev/tty0";
+    int fd = open(ttydev, O_RDWR | O_SYNC);
+    if (fd < 0) {
+        ALOGE("Can't open %s, errno=%d (%s)", ttydev, errno, strerror(errno));
+        consoleFd = -errno;
+        return;
+    }
+    ALOGD("Open /dev/tty0 OK");
+
+    // to make sure that we are in text mode
+    int res = ioctl(fd, KDSETMODE, (void*) KD_TEXT);
+    if (res < 0) {
+        ALOGE("ioctl(%d, KDSETMODE, ...) failed, res %d (%s)",
+                fd, res, strerror(errno));
+    }
+
+    // get the current console
+    struct vt_stat vs;
+    res = ioctl(fd, VT_GETSTATE, &vs);
+    if (res < 0) {
+        ALOGE("ioctl(%d, VT_GETSTATE, ...) failed, res %d (%s)",
+                fd, res, strerror(errno));
+        consoleFd = -errno;
+        return;
+    }
+
+    // switch to console 7 (which is what X normaly uses)
+    int vtnum = 7;
+    do {
+        res = ioctl(fd, VT_ACTIVATE, (void*)vtnum);
+    } while(res < 0 && errno == EINTR);
+    if (res < 0) {
+        ALOGE("ioctl(%d, VT_ACTIVATE, ...) failed, %d (%s) for %d",
+                fd, errno, strerror(errno), vtnum);
+        consoleFd = -errno;
+        return;
+    }
+
+    do {
+        res = ioctl(fd, VT_WAITACTIVE, (void*)vtnum);
+    } while (res < 0 && errno == EINTR);
+    if (res < 0) {
+        ALOGE("ioctl(%d, VT_WAITACTIVE, ...) failed, %d %d %s for %d",
+                fd, res, errno, strerror(errno), vtnum);
+        consoleFd = -errno;
+        return;
+    }
+
+    // open the new console
+    close(fd);
+    fd = open(ttydev, O_RDWR | O_SYNC);
+    if (fd < 0) {
+        ALOGE("Can't open new console %s", ttydev);
+        consoleFd = -errno;
+        return;
+    }
+
+    /* disable console line buffer, echo, ... */
+    struct termios ttyarg;
+    ioctl(fd, TCGETS , &ttyarg);
+    ttyarg.c_iflag = 0;
+    ttyarg.c_lflag = 0;
+    ioctl(fd, TCSETS , &ttyarg);
+
+    // set up signals so we're notified when the console changes
+    // we can't use SIGUSR1 because it's used by the java-vm
+    vm.mode = VT_PROCESS;
+    vm.waitv = 0;
+    vm.relsig = SIGUSR2;
+    vm.acqsig = SIGUNUSED;
+    vm.frsig = 0;
+
+    struct sigaction act;
+    sigemptyset(&act.sa_mask);
+    act.sa_handler = sigHandler;
+    act.sa_flags = 0;
+    sigaction(vm.relsig, &act, NULL);
+
+    sigemptyset(&act.sa_mask);
+    act.sa_handler = sigHandler;
+    act.sa_flags = 0;
+    sigaction(vm.acqsig, &act, NULL);
+
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, vm.relsig);
+    sigaddset(&mask, vm.acqsig);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
+
+    // switch to graphic mode
+    res = ioctl(fd, KDSETMODE, (void*)KD_GRAPHICS);
+    ALOGW_IF(res < 0,
+            "ioctl(%d, KDSETMODE, KD_GRAPHICS) failed, res %d", fd, res);
+
+    prev_vt_num = vs.v_active;
+    vt_num = vtnum;
+    consoleFd = fd;
+}
+
+ConsoleManagerThread::~ConsoleManagerThread()
+{
+    if (consoleFd >= 0) {
+        int fd = consoleFd;
+        int res;
+        ioctl(fd, KDSETMODE, (void*)KD_TEXT);
+        do {
+            res = ioctl(fd, VT_ACTIVATE, (void*)prev_vt_num);
+        } while(res < 0 && errno == EINTR);
+        do {
+            res = ioctl(fd, VT_WAITACTIVE, (void*)prev_vt_num);
+        } while(res < 0 && errno == EINTR);
+        close(fd);
+        char const * const ttydev = "/dev/tty0";
+        fd = open(ttydev, O_RDWR | O_SYNC);
+        ioctl(fd, VT_DISALLOCATE, 0);
+        close(fd);
+    }
+}
+
+status_t ConsoleManagerThread::releaseScreen() const
+{
+    int err = ioctl(consoleFd, VT_RELDISP, (void*)1);
+    ALOGE_IF(err < 0, "ioctl(%d, VT_RELDISP, 1) failed %d (%s)",
+        consoleFd, errno, strerror(errno));
+    return (err < 0) ? (-errno) : status_t(NO_ERROR);
+}
+
+void ConsoleManagerThread::onFirstRef()
+{
+    run("ConsoleManagerThread", PRIORITY_URGENT_DISPLAY);
+}
+
+status_t ConsoleManagerThread::readyToRun()
+{
+    if (consoleFd >= 0) {
+        sSignalCatcherPid = gettid();
+
+        sigset_t mask;
+        sigemptyset(&mask);
+        sigaddset(&mask, vm.relsig);
+        sigaddset(&mask, vm.acqsig);
+        sigprocmask(SIG_BLOCK, &mask, NULL);
+
+        int res = ioctl(consoleFd, VT_SETMODE, &vm);
+        if (res < 0) {
+            ALOGE("ioctl(%d, VT_SETMODE, ...) failed, %d (%s)",
+                    consoleFd, errno, strerror(errno));
+        }
+        return NO_ERROR;
+    }
+    return consoleFd;
+}
+
+void ConsoleManagerThread::requestExit()
+{
+    Thread::requestExit();
+    if (sSignalCatcherPid != 0) {
+        // wake the thread up
+        kill(sSignalCatcherPid, SIGINT);
+        // wait for it...
+    }
+}
+
+bool ConsoleManagerThread::threadLoop()
+{
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, vm.relsig);
+    sigaddset(&mask, vm.acqsig);
+
+    int sig = 0;
+    sigwait(&mask, &sig);
+
+    hw_module_t const* mod;
+    gralloc_module_t const* gr = NULL;
+    status_t err = hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &mod);
+    if (!err) {
+        gr = reinterpret_cast<gralloc_module_t const*>(mod);
+        if (!gr->perform)
+            gr = NULL;
+    }
+
+    if (sig == vm.relsig) {
+        if (gr)
+            gr->perform(gr, GRALLOC_MODULE_PERFORM_LEAVE_VT);
+        mFlinger->screenReleased(mDisplayToken.promote());
+    } else if (sig == vm.acqsig) {
+        mFlinger->screenAcquired(mDisplayToken.promote());
+        if (gr)
+            gr->perform(gr, GRALLOC_MODULE_PERFORM_ENTER_VT);
+    }
+
+    return true;
+}
+
+void ConsoleManagerThread::sigHandler(int sig)
+{
+    // resend the signal to our signal catcher thread
+    ALOGW("received signal %d in thread %d, resending to %d",
+            sig, gettid(), sSignalCatcherPid);
+
+    // we absolutely need the delays below because without them
+    // our main thread never gets a chance to handle the signal.
+    usleep(10000);
+    kill(sSignalCatcherPid, sig);
+    usleep(10000);
+}
+
+pid_t ConsoleManagerThread::sSignalCatcherPid;
+
+#endif
+
+// ----------------------------------------------------------------------------
+
+/*
+ * Initialize the display to the specified values.
+ *
+ */
+
+DisplayDevice::DisplayDevice(
+        const sp<SurfaceFlinger>& flinger,
+        DisplayType type,
+        int32_t hwcId,
+        bool isSecure,
+        const wp<IBinder>& displayToken,
+        const sp<DisplaySurface>& displaySurface,
+        EGLConfig config)
+    : mFlinger(flinger),
+      mType(type), mHwcDisplayId(hwcId),
+      mDisplayToken(displayToken),
+      mDisplaySurface(displaySurface),
+      mDisplay(EGL_NO_DISPLAY),
+      mSurface(EGL_NO_SURFACE),
+      mContext(EGL_NO_CONTEXT),
+      mDisplayWidth(), mDisplayHeight(), mFormat(),
+      mFlags(),
+      mPageFlipCount(),
+      mIsSecure(isSecure),
+      mSecureLayerVisible(false),
+      mScreenAcquired(false),
+      mConsoleManagerThread(0),
+      mLayerStack(NO_LAYER_STACK),
+      mOrientation()
+{
+    mNativeWindow = new Surface(mDisplaySurface->getIGraphicBufferProducer());
+    ANativeWindow* const window = mNativeWindow.get();
+
+    int format;
+    window->query(window, NATIVE_WINDOW_FORMAT, &format);
+
+    /*
+     * Create our display's surface
+     */
+
+    EGLSurface surface;
+    EGLint w, h;
+    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    surface = eglCreateWindowSurface(display, config, window, NULL);
+    eglQuerySurface(display, surface, EGL_WIDTH,  &mDisplayWidth);
+    eglQuerySurface(display, surface, EGL_HEIGHT, &mDisplayHeight);
+
+    mDisplay = display;
+    mSurface = surface;
+    mFormat  = format;
+    mPageFlipCount = 0;
+    mViewport.makeInvalid();
+    mFrame.makeInvalid();
+
+    // virtual displays are always considered enabled
+    mScreenAcquired = (mType >= DisplayDevice::DISPLAY_VIRTUAL);
+
+    // Name the display.  The name will be replaced shortly if the display
+    // was created with createDisplay().
+    switch (mType) {
+        case DISPLAY_PRIMARY:
+            mDisplayName = "Built-in Screen";
+#if __i386__
+            mConsoleManagerThread = new ConsoleManagerThread(mFlinger, mDisplayToken);
+#endif
+            break;
+        case DISPLAY_EXTERNAL:
+            mDisplayName = "HDMI Screen";
+            break;
+        default:
+            mDisplayName = "Virtual Screen";    // e.g. Overlay #n
+            break;
+    }
+
+    // initialize the display orientation transform.
+    setProjection(DisplayState::eOrientationDefault, mViewport, mFrame);
+}
+
+DisplayDevice::~DisplayDevice() {
+    if (mSurface != EGL_NO_SURFACE) {
+        eglDestroySurface(mDisplay, mSurface);
+        mSurface = EGL_NO_SURFACE;
+    }
+#if __i386__
+    if (mConsoleManagerThread != 0) {
+        mConsoleManagerThread->requestExitAndWait();
+        ALOGD("ConsoleManagerThread: destroy primary DisplayDevice");
+    }
+#endif
+}
+
+void DisplayDevice::disconnect(HWComposer& hwc) {
+    if (mHwcDisplayId >= 0) {
+        hwc.disconnectDisplay(mHwcDisplayId);
+        if (mHwcDisplayId >= DISPLAY_VIRTUAL)
+            hwc.freeDisplayId(mHwcDisplayId);
+        mHwcDisplayId = -1;
+    }
+}
+
+bool DisplayDevice::isValid() const {
+    return mFlinger != NULL;
+}
+
+int DisplayDevice::getWidth() const {
+    return mDisplayWidth;
+}
+
+int DisplayDevice::getHeight() const {
+    return mDisplayHeight;
+}
+
+PixelFormat DisplayDevice::getFormat() const {
+    return mFormat;
+}
+
+EGLSurface DisplayDevice::getEGLSurface() const {
+    return mSurface;
+}
+
+void DisplayDevice::setDisplayName(const String8& displayName) {
+    if (!displayName.isEmpty()) {
+        // never override the name with an empty name
+        mDisplayName = displayName;
+    }
+}
+
+uint32_t DisplayDevice::getPageFlipCount() const {
+    return mPageFlipCount;
+}
+
+status_t DisplayDevice::compositionComplete() const {
+    return mDisplaySurface->compositionComplete();
+}
+
+void DisplayDevice::flip(const Region& dirty) const
+{
+    checkGLErrors();
+
+    EGLDisplay dpy = mDisplay;
+    EGLSurface surface = mSurface;
+
+#ifdef EGL_ANDROID_swap_rectangle
+    if (mFlags & SWAP_RECTANGLE) {
+        const Region newDirty(dirty.intersect(bounds()));
+        const Rect b(newDirty.getBounds());
+        eglSetSwapRectangleANDROID(dpy, surface,
+                b.left, b.top, b.width(), b.height());
+    }
+#endif
+
+    mPageFlipCount++;
+}
+
+void DisplayDevice::swapBuffers(HWComposer& hwc) const {
+    // We need to call eglSwapBuffers() unless:
+    // (a) there was no GLES composition this frame, or
+    // (b) we're using a legacy HWC with no framebuffer target support (in
+    //     which case HWComposer::commit() handles things).
+    if (hwc.initCheck() != NO_ERROR ||
+            (hwc.hasGlesComposition(mHwcDisplayId) &&
+             hwc.supportsFramebufferTarget())) {
+        EGLBoolean success = eglSwapBuffers(mDisplay, mSurface);
+        if (!success) {
+            EGLint error = eglGetError();
+            if (error == EGL_CONTEXT_LOST ||
+                    mType == DisplayDevice::DISPLAY_PRIMARY) {
+                LOG_ALWAYS_FATAL("eglSwapBuffers(%p, %p) failed with 0x%08x",
+                        mDisplay, mSurface, error);
+            } else {
+                ALOGE("eglSwapBuffers(%p, %p) failed with 0x%08x",
+                        mDisplay, mSurface, error);
+            }
+        }
+    }
+
+    status_t result = mDisplaySurface->advanceFrame();
+    if (result != NO_ERROR) {
+        ALOGE("[%s] failed pushing new frame to HWC: %d",
+                mDisplayName.string(), result);
+    }
+}
+
+void DisplayDevice::onSwapBuffersCompleted(HWComposer& hwc) const {
+    if (hwc.initCheck() == NO_ERROR) {
+        mDisplaySurface->onFrameCommitted();
+    }
+}
+
+uint32_t DisplayDevice::getFlags() const
+{
+    return mFlags;
+}
+
+EGLBoolean DisplayDevice::makeCurrent(EGLDisplay dpy,
+        const sp<const DisplayDevice>& hw, EGLContext ctx) {
+    EGLBoolean result = EGL_TRUE;
+    EGLSurface sur = eglGetCurrentSurface(EGL_DRAW);
+    if (sur != hw->mSurface) {
+        result = eglMakeCurrent(dpy, hw->mSurface, hw->mSurface, ctx);
+        if (result == EGL_TRUE) {
+            setViewportAndProjection(hw);
+        }
+    }
+    return result;
+}
+
+void DisplayDevice::setViewportAndProjection(const sp<const DisplayDevice>& hw) {
+    GLsizei w = hw->mDisplayWidth;
+    GLsizei h = hw->mDisplayHeight;
+    glViewport(0, 0, w, h);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    // put the origin in the left-bottom corner
+    glOrthof(0, w, 0, h, 0, 1); // l=0, r=w ; b=0, t=h
+    glMatrixMode(GL_MODELVIEW);
+}
+
+// ----------------------------------------------------------------------------
+
+void DisplayDevice::setVisibleLayersSortedByZ(const Vector< sp<Layer> >& layers) {
+    mVisibleLayersSortedByZ = layers;
+    mSecureLayerVisible = false;
+    size_t count = layers.size();
+    for (size_t i=0 ; i<count ; i++) {
+        const sp<Layer>& layer(layers[i]);
+        if (layer->isSecure()) {
+            mSecureLayerVisible = true;
+        }
+    }
+}
+
+const Vector< sp<Layer> >& DisplayDevice::getVisibleLayersSortedByZ() const {
+    return mVisibleLayersSortedByZ;
+}
+
+bool DisplayDevice::getSecureLayerVisible() const {
+    return mSecureLayerVisible;
+}
+
+Region DisplayDevice::getDirtyRegion(bool repaintEverything) const {
+    Region dirty;
+    if (repaintEverything) {
+        dirty.set(getBounds());
+    } else {
+        const Transform& planeTransform(mGlobalTransform);
+        dirty = planeTransform.transform(this->dirtyRegion);
+        dirty.andSelf(getBounds());
+    }
+    return dirty;
+}
+
+// ----------------------------------------------------------------------------
+
+bool DisplayDevice::canDraw() const {
+    return mScreenAcquired;
+}
+
+void DisplayDevice::releaseScreen() const {
+    mScreenAcquired = false;
+    if (mConsoleManagerThread != 0) {
+        mConsoleManagerThread->releaseScreen();
+    }
+}
+
+void DisplayDevice::acquireScreen() const {
+    mScreenAcquired = true;
+}
+
+bool DisplayDevice::isScreenAcquired() const {
+    return mScreenAcquired;
+}
+
+// ----------------------------------------------------------------------------
+
+void DisplayDevice::setLayerStack(uint32_t stack) {
+    mLayerStack = stack;
+    dirtyRegion.set(bounds());
+}
+
+// ----------------------------------------------------------------------------
+
+status_t DisplayDevice::orientationToTransfrom(
+        int orientation, int w, int h, Transform* tr)
+{
+    uint32_t flags = 0;
+    switch (orientation) {
+    case DisplayState::eOrientationDefault:
+        flags = Transform::ROT_0;
+        break;
+    case DisplayState::eOrientation90:
+        flags = Transform::ROT_90;
+        break;
+    case DisplayState::eOrientation180:
+        flags = Transform::ROT_180;
+        break;
+    case DisplayState::eOrientation270:
+        flags = Transform::ROT_270;
+        break;
+    default:
+        return BAD_VALUE;
+    }
+    tr->set(flags, w, h);
+    return NO_ERROR;
+}
+
+void DisplayDevice::setProjection(int orientation,
+        const Rect& newViewport, const Rect& newFrame) {
+    Rect viewport(newViewport);
+    Rect frame(newFrame);
+
+    const int w = mDisplayWidth;
+    const int h = mDisplayHeight;
+
+    Transform R;
+    DisplayDevice::orientationToTransfrom(orientation, w, h, &R);
+
+    if (!frame.isValid()) {
+        // the destination frame can be invalid if it has never been set,
+        // in that case we assume the whole display frame.
+        frame = Rect(w, h);
+    }
+
+    if (viewport.isEmpty()) {
+        // viewport can be invalid if it has never been set, in that case
+        // we assume the whole display size.
+        // it's also invalid to have an empty viewport, so we handle that
+        // case in the same way.
+        viewport = Rect(w, h);
+        if (R.getOrientation() & Transform::ROT_90) {
+            // viewport is always specified in the logical orientation
+            // of the display (ie: post-rotation).
+            swap(viewport.right, viewport.bottom);
+        }
+    }
+
+    dirtyRegion.set(getBounds());
+
+    Transform TL, TP, S;
+    float src_width  = viewport.width();
+    float src_height = viewport.height();
+    float dst_width  = frame.width();
+    float dst_height = frame.height();
+    if (src_width != dst_width || src_height != dst_height) {
+        float sx = dst_width  / src_width;
+        float sy = dst_height / src_height;
+        S.set(sx, 0, 0, sy);
+    }
+
+    float src_x = viewport.left;
+    float src_y = viewport.top;
+    float dst_x = frame.left;
+    float dst_y = frame.top;
+    TL.set(-src_x, -src_y);
+    TP.set(dst_x, dst_y);
+
+    // The viewport and frame are both in the logical orientation.
+    // Apply the logical translation, scale to physical size, apply the
+    // physical translation and finally rotate to the physical orientation.
+    mGlobalTransform = R * TP * S * TL;
+
+    const uint8_t type = mGlobalTransform.getType();
+    mNeedsFiltering = (!mGlobalTransform.preserveRects() ||
+            (type >= Transform::SCALE));
+
+    mScissor = mGlobalTransform.transform(viewport);
+    if (mScissor.isEmpty()) {
+        mScissor.set(getBounds());
+    }
+
+    mOrientation = orientation;
+    mViewport = viewport;
+    mFrame = frame;
+}
+
+void DisplayDevice::dump(String8& result, char* buffer, size_t SIZE) const {
+    const Transform& tr(mGlobalTransform);
+    snprintf(buffer, SIZE,
+        "+ DisplayDevice: %s\n"
+        "   type=%x, hwcId=%d, layerStack=%u, (%4dx%4d), ANativeWindow=%p, orient=%2d (type=%08x), "
+        "flips=%u, isSecure=%d, secureVis=%d, acquired=%d, numLayers=%u\n"
+        "   v:[%d,%d,%d,%d], f:[%d,%d,%d,%d], s:[%d,%d,%d,%d],"
+        "transform:[[%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f][%0.3f,%0.3f,%0.3f]]\n",
+        mDisplayName.string(), mType, mHwcDisplayId,
+        mLayerStack, mDisplayWidth, mDisplayHeight, mNativeWindow.get(),
+        mOrientation, tr.getType(), getPageFlipCount(),
+        mIsSecure, mSecureLayerVisible, mScreenAcquired, mVisibleLayersSortedByZ.size(),
+        mViewport.left, mViewport.top, mViewport.right, mViewport.bottom,
+        mFrame.left, mFrame.top, mFrame.right, mFrame.bottom,
+        mScissor.left, mScissor.top, mScissor.right, mScissor.bottom,
+        tr[0][0], tr[1][0], tr[2][0],
+        tr[0][1], tr[1][1], tr[2][1],
+        tr[0][2], tr[1][2], tr[2][2]);
+
+    result.append(buffer);
+
+    String8 surfaceDump;
+    mDisplaySurface->dump(surfaceDump);
+    result.append(surfaceDump);
+}
