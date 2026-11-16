@@ -60,7 +60,23 @@ while IFS=$'\t' read -r target_path upstream_repo upstream_branch; do
 
   git add -- "$destination" "$marker"
   git commit -m "Vendor Android-x86 Jelly Bean: $target_path"
-  git push origin "HEAD:refs/heads/main"
+
+  # A maintainer edit can land on main while this long import is running.
+  # Rebase this project's commit onto the new main head and retry the push.
+  pushed=false
+  for attempt in 1 2 3; do
+    if git push origin "HEAD:refs/heads/main"; then
+      pushed=true
+      break
+    fi
+    echo "Push was rejected; fetching main and rebasing (attempt $attempt/3)..."
+    git fetch origin main
+    git rebase origin/main
+  done
+  [[ "$pushed" == "true" ]] || {
+    echo "Could not push imported project $target_path after three attempts." >&2
+    exit 1
+  }
 
   echo "Imported $target_path (${size_mib} MiB, $upstream_commit)"
   rm -rf "$temp_dir"
