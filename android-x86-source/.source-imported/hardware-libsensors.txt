@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/hardware-libsensors
+branch=jb-x86
+commit=a95016658a75782dbba26c7874a963e3e5de4b38
