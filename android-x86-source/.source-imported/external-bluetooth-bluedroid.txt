@@ -1,0 +1,3 @@
+repository=https://github.com/android-x86-mirror/external-bluetooth-bluedroid
+branch=jb-x86
+commit=1570bf4ad490bc5c23a430734aa9a31c6ec7c083
